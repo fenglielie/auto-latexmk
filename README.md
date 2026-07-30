@@ -15,20 +15,6 @@ invocation performs one scan and one compilation batch.
 **One-shot compilation** · **Per-file engine selection** · **Parallel jobs** ·
 **Human and JSON output**
 
-## 📚 Contents
-
-- [✨ Features](#features)
-- [📦 Requirements](#requirements)
-- [🚀 Installation](#installation)
-- [⚡ Quick start](#quick-start)
-- [⚙️ How it works](#how-it-works)
-- [📖 Command-line reference](#command-line-reference)
-- [🧰 Common workflows](#common-workflows)
-- [🖥️ Output modes](#output-modes)
-- [🚦 Exit status](#exit-status)
-- [🛠️ Development](#development)
-
-<a id="features"></a>
 ## ✨ Features
 
 - 🔎 Compile one main `.tex` file or recursively compile every main document in a
@@ -45,7 +31,6 @@ invocation performs one scan and one compilation batch.
 - 💾 Remember the last successful engine used for each document.
 - ⏱️ Stop non-interactively on LaTeX errors and enforce a per-file timeout.
 
-<a id="requirements"></a>
 ## 📦 Requirements
 
 - Python 3.11 or newer.
@@ -57,7 +42,6 @@ invocation performs one scan and one compilation batch.
 generation, and rerun decisions to `latexmk`; it does not implement a TeX build
 system itself.
 
-<a id="installation"></a>
 ## 🚀 Installation
 
 Install the current Git version with `uv`:
@@ -82,7 +66,6 @@ auto-latexmk --version
 auto-latexmk --help
 ```
 
-<a id="quick-start"></a>
 ## ⚡ Quick start
 
 ```bash
@@ -101,7 +84,7 @@ auto-latexmk -j 2 .
 # Compile sequentially
 auto-latexmk -j 1 .
 
-# Force pdfLaTeX for documents without a stronger source-level requirement
+# Force pdfLaTeX for every discovered document
 auto-latexmk -pdf .
 ```
 
@@ -110,7 +93,6 @@ uncommented source contains `\documentclass`. Included fragments without a
 document class are skipped. Passing a file directly still requires it to be a
 main `.tex` document.
 
-<a id="how-it-works"></a>
 ## ⚙️ How it works
 
 Each invocation follows the same one-shot pipeline:
@@ -156,19 +138,32 @@ Git-ignored paths.
 
 The engine is selected independently for every task, in this order:
 
-1. A `% !TEX` directive on the first line.
-2. `ctex` detected before `\begin{document}`, which selects XeLaTeX.
-3. A command-line engine flag: `-pdfxe`, `-pdf`, or `-pdflua`.
-4. The last successful engine stored in the compiler preference cache.
-5. XeLaTeX as the final fallback.
+1. A command-line engine flag: `-pdfxe`, `-pdf`, or `-pdflua`.
+2. A `% !TEX` directive on the first line.
+3. The last successful engine stored in the compiler preference cache.
 
-This means a source-level `% !TEX` directive or `ctex` requirement takes
-priority over a command-line default. Example:
+```mermaid
+flowchart TD
+    A{"CLI engine specified?"} -->|"Yes"| B["Use the CLI engine"]
+    A -->|"No"| C{"Valid % !TEX on line 1?"}
+    C -->|"Yes"| D["Use the % !TEX engine"]
+    C -->|"No"| E{"Successful engine cached?"}
+    E -->|"Yes"| F["Use the cached engine"]
+    E -->|"No"| G["Fall back to xelatex"]
+```
+
+An explicit command-line option is a force override. When one is present,
+`auto-latexmk` does not inspect `% !TEX` and does not read the compiler
+preference cache. If none of the three selectors provides an engine, XeLaTeX
+is used as the fixed fallback:
 
 ```tex
 % !TEX program = lualatex
 \documentclass{article}
 ```
+
+The example above uses LuaLaTeX normally, but `auto-latexmk -pdf main.tex`
+forces pdfLaTeX.
 
 ### 3. Task execution
 
@@ -216,13 +211,12 @@ source path in:
 ```
 
 The cache is merged and written atomically with process-local and
-cross-process locking. Failed compilations do not update it. Source directives,
-`ctex`, and explicit engine flags always take priority over the cached value.
+cross-process locking. Failed compilations do not update it. Explicit engine
+flags have the highest priority, followed by `% !TEX`, then the cached value.
 
 Use `--no-cache-pref` for reproducible runs that should not read or write these
 preferences.
 
-<a id="command-line-reference"></a>
 ## 📖 Command-line reference
 
 ```text
@@ -239,9 +233,9 @@ auto-latexmk [-h] [--output-mode {progressbar,list,json}]
 | `PATH`                            | Directory to scan recursively, or one `.tex` file; defaults to the current directory           |
 | `-h`, `--help`                    | Show help and exit                                                                             |
 | `--output-mode MODE`              | Console output: `progressbar`, `list`, or `json`; defaults to `progressbar`                    |
-| `-pdfxe`                          | Use XeLaTeX when no source-level engine requirement overrides it                               |
-| `-pdf`                            | Use pdfLaTeX when no source-level engine requirement overrides it                              |
-| `-pdflua`                         | Use LuaLaTeX when no source-level engine requirement overrides it                              |
+| `-pdfxe`                          | Force XeLaTeX for every discovered document                                                    |
+| `-pdf`                            | Force pdfLaTeX for every discovered document                                                   |
+| `-pdflua`                         | Force LuaLaTeX for every discovered document                                                   |
 | `--debug-log FILE`                | Overwrite `FILE` with detailed diagnostics and complete compiler output                        |
 | `--no-color`                      | Disable colored terminal output                                                                |
 | `--dry-run`                       | Discover and display tasks without cleaning or compiling                                       |
@@ -257,7 +251,6 @@ auto-latexmk [-h] [--output-mode {progressbar,list,json}]
 `--jobs` and `--timeout` must both be positive integers. The three engine
 options are mutually exclusive.
 
-<a id="common-workflows"></a>
 ## 🧰 Common workflows
 
 ### Clean before compiling
@@ -303,7 +296,6 @@ auto-latexmk --debug-log auto-latexmk-debug.log .
 The debug log is an independent channel and does not change the selected
 console output mode. It is overwritten on every invocation.
 
-<a id="output-modes"></a>
 ## 🖥️ Output modes
 
 ### `progressbar`
@@ -369,7 +361,6 @@ Failed tasks may additionally contain `error` and `log_file`. Dry runs use
 handled by `argparse`, which writes usage information to stderr and exits with
 status 2 before a JSON reporter is created.
 
-<a id="exit-status"></a>
 ## 🚦 Exit status
 
 | Code  | Meaning                                                     |
@@ -379,7 +370,6 @@ status 2 before a JSON reporter is created.
 | `2`   | Invalid command-line usage                                  |
 | `130` | Interrupted by Ctrl+C                                       |
 
-<a id="development"></a>
 ## 🛠️ Development
 
 Create or update the local environment:

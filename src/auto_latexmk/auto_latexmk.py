@@ -593,9 +593,7 @@ def clean_all_aux_subdirs_if_exist(path, exclude_patterns):
                 shutil.rmtree(aux_dir_path)
                 logger.debug(f"Deleted {aux_dir_path}")
             except OSError as e:
-                raise AutoLatexmkError(
-                    f"Failed to delete {aux_dir_path}: {e}"
-                ) from e
+                raise AutoLatexmkError(f"Failed to delete {aux_dir_path}: {e}") from e
 
     elif os.path.isdir(path):
         for subdir, dirs, _ in os.walk(path, topdown=True):
@@ -924,9 +922,7 @@ def is_main_tex_file(tex_file_path):
     """Return whether a .tex file contains a document class declaration."""
     try:
         with open(tex_file_path, "r", encoding="utf-8") as f:
-            return any(
-                "\\documentclass" in strip_latex_comment(line) for line in f
-            )
+            return any("\\documentclass" in strip_latex_comment(line) for line in f)
 
     except (OSError, UnicodeError) as e:
         logger.error(f"Error reading {tex_file_path}: {e}")
@@ -938,52 +934,35 @@ def get_tex_engine(
 ):
     """
     Determine which LaTeX engine to use for a .tex file.
-    - Check first line for shebang (% !TEX ...)
-    - If no shebang, scan until \\begin{document} for 'ctex' -> xelatex
-    - If *default_engine* is not set, consult *pref_cache* (if given)
-    - Otherwise use *default_engine* or hard-coded xelatex
+    - Use *default_engine* immediately when explicitly selected by the CLI
+    - Otherwise check the first line for a shebang (% !TEX ...)
+    - Then consult *pref_cache* (if given)
+    - Finally fall back to xelatex
     Returns (engine, line_info)
     """
+    if default_engine is not None:
+        return default_engine, "command-line option"
+
     try:
         with open(tex_file_path, "r", encoding="utf-8") as f:
-            for idx, line in enumerate(f):
-                line_strip = line.strip()
-
-                # Check shebang in first line
-                if idx == 0 and line_strip.startswith("% !TEX"):
-                    if "xelatex" in line_strip:
-                        return "xelatex", line_strip
-                    elif "pdflatex" in line_strip:
-                        return "pdflatex", line_strip
-                    elif "lualatex" in line_strip:
-                        return "lualatex", line_strip
-
-                line_strip = strip_latex_comment(line).strip()
-
-                # Stop scanning after \begin{document}
-                if r"\begin{document}" in line_strip:
-                    break
-
-                # Detect ctex package usage -> xelatex
-                if "ctex" in line_strip:
-                    return "xelatex", line_strip
+            first_line = f.readline().strip()
+            if first_line.startswith("% !TEX"):
+                if "xelatex" in first_line:
+                    return "xelatex", first_line
+                if "pdflatex" in first_line:
+                    return "pdflatex", first_line
+                if "lualatex" in first_line:
+                    return "lualatex", first_line
 
     except (OSError, UnicodeError) as e:
         logger.error(f"Error reading {tex_file_path}: {e}")
-        return (
-            _resolve_fallback_engine(tex_file_path, default_engine, pref_cache),
-            None,
-        )
+        return (_resolve_fallback_engine(tex_file_path, pref_cache), None)
 
-    return (_resolve_fallback_engine(tex_file_path, default_engine, pref_cache), None)
+    return (_resolve_fallback_engine(tex_file_path, pref_cache), None)
 
 
-def _resolve_fallback_engine(
-    tex_file_path, default_engine, pref_cache: CompilerPrefCache | None
-):
-    """Resolve engine when no shebang or ctex package was found."""
-    if default_engine is not None:
-        return default_engine
+def _resolve_fallback_engine(tex_file_path, pref_cache: CompilerPrefCache | None):
+    """Resolve engine when no command-line option or % !TEX directive was found."""
     if pref_cache is not None:
         cached = pref_cache.get(tex_file_path)
         if cached is not None:
@@ -1150,21 +1129,21 @@ def parse_args(argv=None):
         action="store_const",
         const="xelatex",
         dest="engine",
-        help="Use XeLaTeX compiler.",
+        help="Force XeLaTeX compiler.",
     )
     engine_group.add_argument(
         "-pdf",
         action="store_const",
         const="pdflatex",
         dest="engine",
-        help="Use pdfLaTeX compiler.",
+        help="Force pdfLaTeX compiler.",
     )
     engine_group.add_argument(
         "-pdflua",
         action="store_const",
         const="lualatex",
         dest="engine",
-        help="Use LuaLaTeX compiler.",
+        help="Force LuaLaTeX compiler.",
     )
     parser.set_defaults(engine=None)
 

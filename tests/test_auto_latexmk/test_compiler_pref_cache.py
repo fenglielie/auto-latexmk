@@ -138,18 +138,19 @@ class TexDiscoveryTests(unittest.TestCase):
                 "shebang.tex",
                 "% !TEX program = pdflatex\n\\documentclass{article}\n",
             )
-            ctex_path = self.write_tex(
-                temp_dir,
-                "ctex.tex",
-                "\\documentclass{article}\n\\usepackage{ctex}\n\\begin{document}\n",
-            )
             cached_path = self.write_tex(
                 temp_dir,
                 "cached.tex",
-                "\\documentclass{article}\n\\begin{document}\n",
+                "\\documentclass{article}\n",
+            )
+            fallback_path = self.write_tex(
+                temp_dir,
+                "fallback.tex",
+                "\\documentclass{article}\n",
             )
 
             cache = CompilerPrefCache(os.path.join(temp_dir, "cache.json"))
+            cache.set(shebang_path, "xelatex")
             cache.set(cached_path, "lualatex")
 
             self.assertEqual(
@@ -157,10 +158,12 @@ class TexDiscoveryTests(unittest.TestCase):
                 "pdflatex",
             )
             self.assertEqual(
-                get_tex_engine(ctex_path, default_engine="pdflatex", pref_cache=cache)[
-                    0
-                ],
-                "xelatex",
+                get_tex_engine(
+                    shebang_path,
+                    default_engine="lualatex",
+                    pref_cache=cache,
+                )[0],
+                "lualatex",
             )
             self.assertEqual(
                 get_tex_engine(cached_path, default_engine=None, pref_cache=cache)[0],
@@ -172,22 +175,28 @@ class TexDiscoveryTests(unittest.TestCase):
                 )[0],
                 "pdflatex",
             )
+            self.assertEqual(
+                get_tex_engine(fallback_path, default_engine=None, pref_cache=None)[0],
+                "xelatex",
+            )
 
-    def test_commented_ctex_does_not_override_engine(self):
+    def test_ctex_is_not_an_engine_signal(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             tex_path = self.write_tex(
                 temp_dir,
-                "commented-ctex.tex",
-                "% ctex is intentionally not used\n\\begin{document}\n",
+                "ctex.tex",
+                "\\documentclass{ctexart}\n",
             )
+            cache = CompilerPrefCache(os.path.join(temp_dir, "cache.json"))
+            cache.set(tex_path, "lualatex")
 
             self.assertEqual(
                 get_tex_engine(
                     tex_path,
-                    default_engine="pdflatex",
-                    pref_cache=None,
+                    default_engine=None,
+                    pref_cache=cache,
                 )[0],
-                "pdflatex",
+                "lualatex",
             )
 
     def test_clean_failure_is_reported(self):
