@@ -303,11 +303,15 @@ console output mode. It is overwritten on every invocation.
 The default mode writes a compact `tqdm` progress bar to stderr:
 
 ```text
-Compile 29/29 |████████████████████| 100% [00:05] 4 jobs 28 OK, 1 FAILED
+Compile |████████████        |  59% [00:03<00:02] 12 LEFT 16 OK  1 FAILED (4 parallel jobs)
 ```
 
-The job count is omitted when `--jobs=1`. Success and failure counts update as
-tasks finish.
+The time field shows elapsed and estimated remaining time. `LEFT`, `OK`, and
+`FAILED` are mutually exclusive task states whose counts always add up to the
+total. Their numeric fields reserve the width of the total task count, so the
+layout stays aligned as values change. The parenthesized parallel-job count is
+the number of tasks actually running at that moment, not the configured
+maximum; it appears at the far right only while more than one task is running.
 
 ### `list`
 

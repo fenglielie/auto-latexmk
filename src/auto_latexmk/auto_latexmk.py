@@ -201,6 +201,9 @@ class Reporter(ABC):
     def interrupted(self) -> None:
         pass
 
+    def running_changed(self, running: int) -> None:
+        """Report the number of tasks currently executing."""
+
     def close(self) -> None:
         pass
 
@@ -210,52 +213,71 @@ class ProgressBarReporter(Reporter):
         self,
         *,
         color: bool,
-        jobs: int = 1,
         stream: TextIO | None = None,
     ):
         super().__init__(stream=stream or sys.stderr, color=color)
-        self.jobs = jobs
         self._bar = None
         self._base_bar_format = ""
         self._succeeded = 0
         self._failed = 0
+        self._running = 0
+        self._count_width = 1
+        self._lock = threading.RLock()
+
+    def _current_bar_format(self) -> str:
+        left = max(self._total - self._succeeded - self._failed, 0)
+        status_suffix = (
+            f" {left:>{self._count_width}} LEFT"
+            f" {self._succeeded:>{self._count_width}} OK"
+            f" {self._failed:>{self._count_width}} FAILED"
+        )
+        parallel_suffix = (
+            f" ({self._running} parallel jobs)" if self._running > 1 else ""
+        )
+        return f"{self._base_bar_format}{status_suffix}{parallel_suffix}"
 
     def start(self, tasks: list[CompileTask]) -> None:
-        self._total = len(tasks)
-        index_width = len(str(max(self._total, 1)))
-        jobs_suffix = f" {self.jobs} jobs" if self.jobs > 1 else ""
-        self._base_bar_format = (
-            f"{{desc}} {{n_fmt:>{index_width}}}/{{total_fmt}} "
-            "|{bar:20}| {percentage:3.0f}% "
-            f"[{{elapsed}}]{jobs_suffix}"
-        )
-        self._bar = tqdm(
-            total=self._total,
-            desc="Compile",
-            bar_format=self._base_bar_format,
-            colour="green" if self.color else None,
-            file=self.stream,
-        )
+        with self._lock:
+            self._total = len(tasks)
+            self._succeeded = 0
+            self._failed = 0
+            self._running = 0
+            self._count_width = len(str(max(self._total, 1)))
+            self._base_bar_format = (
+                "{desc} |{bar:20}| {percentage:3.0f}% "
+                "[{elapsed}<{remaining}]"
+            )
+            self._bar = tqdm(
+                total=self._total,
+                desc="Compile",
+                bar_format=self._current_bar_format(),
+                colour="green" if self.color else None,
+                file=self.stream,
+            )
+
+    def running_changed(self, running: int) -> None:
+        with self._lock:
+            self._running = running
+            if self._bar is not None:
+                self._bar.bar_format = self._current_bar_format()
+                self._bar.refresh()
 
     def task_finished(self, result: CompileResult) -> None:
-        bar = self._bar
-        if bar is None:
-            raise RuntimeError("Progress reporter has not been started")
+        with self._lock:
+            bar = self._bar
+            if bar is None:
+                raise RuntimeError("Progress reporter has not been started")
 
-        if result.success:
-            self._succeeded += 1
-        else:
-            self._failed += 1
-
-        status = f"{self._succeeded} OK"
-        if self._failed:
-            status += f", {self._failed} FAILED"
-            if self.color:
-                bar.colour = "red"
-        bar.bar_format = f"{self._base_bar_format} {status}"
-        bar.update(1)
-        if not result.success:
-            bar.refresh()
+            if result.success:
+                self._succeeded += 1
+            else:
+                self._failed += 1
+                if self.color:
+                    bar.colour = "red"
+            bar.bar_format = self._current_bar_format()
+            bar.update(1)
+            if not result.success:
+                bar.refresh()
 
     def finish(self, summary: RunSummary) -> None:
         self.close()
@@ -276,9 +298,10 @@ class ProgressBarReporter(Reporter):
         print("Interrupted.", file=self.stream)
 
     def close(self) -> None:
-        if self._bar is not None:
-            self._bar.close()
-            self._bar = None
+        with self._lock:
+            if self._bar is not None:
+                self._bar.close()
+                self._bar = None
 
 
 class ListReporter(Reporter):
@@ -405,9 +428,9 @@ class JsonReporter(Reporter):
         self.stream.flush()
 
 
-def create_reporter(output_mode: str, *, color: bool, jobs: int = 1) -> Reporter:
+def create_reporter(output_mode: str, *, color: bool) -> Reporter:
     if output_mode == "progressbar":
-        return ProgressBarReporter(color=color, jobs=jobs)
+        return ProgressBarReporter(color=color)
     if output_mode == "list":
         return ListReporter(color=color)
     if output_mode == "json":
@@ -866,11 +889,28 @@ def run_compile_tasks(tasks, *, jobs: int, reporter):
 
     STOP_EVENT.clear()
     interrupted = False
+    running = 0
+    running_lock = threading.Lock()
+
+    def run_tracked_task(task):
+        nonlocal running
+        started = False
+        try:
+            with running_lock:
+                running += 1
+                started = True
+                reporter.running_changed(running)
+            return run_single_compile_task(task)
+        finally:
+            if started:
+                with running_lock:
+                    running -= 1
+                    reporter.running_changed(running)
 
     executor = ThreadPoolExecutor(max_workers=jobs)
     try:
         futures = {
-            executor.submit(run_single_compile_task, task): task for task in tasks
+            executor.submit(run_tracked_task, task): task for task in tasks
         }
         for future in as_completed(futures):
             try:
@@ -1230,7 +1270,6 @@ def main():
         reporter = create_reporter(
             args.output_mode,
             color=not args.no_color,
-            jobs=jobs,
         )
         try:
             configure_debug_logging(args.debug_log)

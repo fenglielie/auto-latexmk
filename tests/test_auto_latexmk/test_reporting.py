@@ -2,9 +2,10 @@ import io
 import json
 import os
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from auto_latexmk.auto_latexmk import (
     CompileResult,
@@ -17,6 +18,7 @@ from auto_latexmk.auto_latexmk import (
     create_reporter,
     main,
     parse_args,
+    run_compile_tasks,
 )
 
 
@@ -150,9 +152,10 @@ class ReporterTests(unittest.TestCase):
         kwargs = mock_tqdm.call_args.kwargs
         self.assertEqual(kwargs["desc"], "Compile")
         self.assertIn("{bar:20}", kwargs["bar_format"])
+        self.assertIn("[{elapsed}<{remaining}]", kwargs["bar_format"])
         self.assertIsNone(kwargs["colour"])
         self.assertNotIn("dynamic_ncols", kwargs)
-        self.assertTrue(bar.bar_format.endswith(" 1 OK"))
+        self.assertTrue(bar.bar_format.endswith(" 0 LEFT 1 OK 0 FAILED"))
         bar.update.assert_called_once_with(1)
 
     @patch("auto_latexmk.auto_latexmk.tqdm")
@@ -167,7 +170,7 @@ class ReporterTests(unittest.TestCase):
         self.assertEqual(mock_tqdm.call_args.kwargs["colour"], "green")
 
     @patch("auto_latexmk.auto_latexmk.tqdm")
-    def test_progress_bar_reserves_width_for_task_count(self, mock_tqdm):
+    def test_progress_bar_reserves_width_for_all_status_counts(self, mock_tqdm):
         reporter = ProgressBarReporter(
             color=False,
             stream=NonTTYStringIO(),
@@ -175,32 +178,61 @@ class ReporterTests(unittest.TestCase):
         tasks = [make_task(index=i) for i in range(1, 30)]
 
         reporter.start(tasks)
+        bar = mock_tqdm.return_value
+        initial_format = mock_tqdm.call_args.kwargs["bar_format"]
+        self.assertNotIn("{n_fmt}", initial_format)
+        self.assertTrue(initial_format.endswith("29 LEFT  0 OK  0 FAILED"))
 
-        self.assertIn(
-            "{n_fmt:>2}/{total_fmt}",
-            mock_tqdm.call_args.kwargs["bar_format"],
-        )
+        for task in tasks[:20]:
+            reporter.task_finished(CompileResult(task, "succeeded", 0.1, []))
+        self.assertTrue(bar.bar_format.endswith(" 9 LEFT 20 OK  0 FAILED"))
 
     @patch("auto_latexmk.auto_latexmk.tqdm")
-    def test_progress_bar_shows_jobs_only_when_concurrent(self, mock_tqdm):
+    def test_progress_bar_shows_actual_running_jobs_only_when_concurrent(
+        self, mock_tqdm
+    ):
         reporter = ProgressBarReporter(
             color=False,
-            jobs=4,
             stream=NonTTYStringIO(),
         )
         reporter.start([make_task()])
-        self.assertTrue(
-            mock_tqdm.call_args.kwargs["bar_format"].endswith(" 4 jobs")
+        bar = mock_tqdm.return_value
+        self.assertNotIn(
+            "parallel jobs", mock_tqdm.call_args.kwargs["bar_format"]
         )
 
-        mock_tqdm.reset_mock()
-        reporter = ProgressBarReporter(
-            color=False,
-            jobs=1,
-            stream=NonTTYStringIO(),
-        )
-        reporter.start([make_task()])
-        self.assertNotIn("jobs", mock_tqdm.call_args.kwargs["bar_format"])
+        reporter.running_changed(4)
+        self.assertTrue(bar.bar_format.endswith(" (4 parallel jobs)"))
+
+        reporter.running_changed(1)
+        self.assertNotIn("parallel jobs", bar.bar_format)
+
+        reporter.running_changed(0)
+        self.assertNotIn("parallel jobs", bar.bar_format)
+
+    def test_runner_reports_actual_running_task_count(self):
+        tasks = [make_task(index=index) for index in range(1, 4)]
+        reporter = MagicMock()
+        first_workers_ready = threading.Barrier(2)
+
+        def compile_task(task):
+            if task.index <= 2:
+                first_workers_ready.wait(timeout=2)
+            return CompileResult(task, "succeeded", 0.1, [])
+
+        with patch(
+            "auto_latexmk.auto_latexmk.run_single_compile_task",
+            side_effect=compile_task,
+        ):
+            results = run_compile_tasks(tasks, jobs=2, reporter=reporter)
+
+        running_counts = [
+            call.args[0] for call in reporter.running_changed.call_args_list
+        ]
+        self.assertEqual(len(results), 3)
+        self.assertEqual(max(running_counts), 2)
+        self.assertEqual(running_counts[-1], 0)
+        self.assertEqual(reporter.task_finished.call_count, 3)
 
     @patch("auto_latexmk.auto_latexmk.tqdm")
     def test_progress_reports_failure_immediately(self, mock_tqdm):
@@ -212,7 +244,7 @@ class ReporterTests(unittest.TestCase):
         reporter.start([task])
         reporter.task_finished(CompileResult(task, "failed", 0.1, []))
 
-        self.assertTrue(bar.bar_format.endswith(" 0 OK, 1 FAILED"))
+        self.assertTrue(bar.bar_format.endswith(" 0 LEFT 0 OK 1 FAILED"))
         self.assertEqual(bar.colour, "red")
         bar.refresh.assert_called_once_with()
 
