@@ -1,0 +1,23 @@
+% !TEX program = xelatex
+\documentclass{ctexart}
+\usepackage{amsmath}
+
+\title{数值分析测试文档}
+\author{集成测试}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+\input{sections/overview}
+
+\section{模型问题}
+考虑方程
+\begin{equation}
+  -u''(x) = f(x), \qquad x \in (0,1).
+  \label{eq:model}
+\end{equation}
+公式~\eqref{eq:model} 用于验证交叉引用和自动重复编译。
+
+\end{document}
