@@ -53,6 +53,25 @@ class CLIParsingTests(unittest.TestCase):
         self.assert_parse_error(["--output-mode", "json", "--no-color"])
         self.assert_parse_error(["--action", "export", "--no-color"])
 
+    def test_export_format_defaults_to_auto(self):
+        args = parse_args(["--action", "export"])
+        self.assertEqual(args.export_format, "auto")
+
+    def test_export_format_explicit_values(self):
+        for value in ("pwsh", "bash"):
+            with self.subTest(value=value):
+                args = parse_args(["--action", "export", "--export-format", value])
+                self.assertEqual(args.export_format, value)
+
+    def test_export_format_rejected_without_export_action(self):
+        for action in ("run", "preview"):
+            with self.subTest(action=action):
+                self.assert_parse_error(["--action", action, "--export-format", "pwsh"])
+                self.assert_parse_error(["--action", action, "--export-format", "bash"])
+        # auto (default) is always accepted regardless of action
+        args = parse_args(["--action", "run", "--export-format", "auto"])
+        self.assertEqual(args.export_format, "auto")
+
     def test_positive_execution_values_are_required(self):
         self.assert_parse_error(["--jobs", "0"])
         self.assert_parse_error(["--timeout", "0"])

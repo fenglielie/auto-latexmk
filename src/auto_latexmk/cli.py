@@ -57,6 +57,7 @@ Output channels:
 
 Scope rules:
   --output-mode, --jobs, and --timeout are valid only with --action run.
+  --export-format is valid only with --action export.
   Engine options and --no-engine-cache are invalid with --task clean.
   --no-color is invalid with JSON output or command export.
 
@@ -95,6 +96,16 @@ Examples:
         help=(
             "Consume the completed plan by executing it, displaying it, or "
             "exporting a platform-native script. (default: run)"
+        ),
+    )
+    parser.add_argument(
+        "--export-format",
+        choices=["auto", "pwsh", "bash"],
+        default="auto",
+        help=(
+            "Script format for export; valid only with --action export. "
+            "auto selects PowerShell on Windows and sh on POSIX. "
+            "(default: auto)"
         ),
     )
     parser.add_argument(
@@ -226,6 +237,8 @@ Examples:
             parser.error("--jobs is valid only with --action run")
         if args.timeout is not None:
             parser.error("--timeout is valid only with --action run")
+    if args.action is not Action.EXPORT and args.export_format != "auto":
+        parser.error("--export-format is valid only with --action export")
     if args.jobs is not None and args.jobs < 1:
         parser.error("--jobs must be at least 1")
     if args.timeout is not None and args.timeout < 1:
@@ -285,7 +298,8 @@ def main():
             preview_plan(plan)
             return 0
         if args.action is Action.EXPORT:
-            export_plan(plan)
+            platform_map = {"auto": None, "pwsh": "windows", "bash": "posix"}
+            export_plan(plan, platform=platform_map[args.export_format])
             return 0
 
         assert reporter is not None

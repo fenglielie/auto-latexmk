@@ -119,6 +119,7 @@ auto-latexmk --jobs 2
 auto-latexmk [-h]
              [--task {compile,clean,clean-compile}]
              [--action {run,preview,export}]
+             [--export-format {auto,pwsh,bash}]
              [--output-mode {progressbar,list,json}]
              [--engine {auto,xelatex,pdflatex,lualatex}
                | -pdfxe | -pdf | -pdflua]
@@ -135,6 +136,7 @@ auto-latexmk [-h]
 | `PATH` | Directory to scan or one main `.tex` file; defaults to the current directory |
 | `--task TYPE` | Construct `compile`, `clean`, or `clean-compile` tasks; defaults to `compile` |
 | `--action ACTION` | `run`, `preview`, or `export` the task plan; defaults to `run` |
+| `--export-format FORMAT` | `auto`, `pwsh`, or `bash`; valid only for `export`; defaults to `auto` |
 | `--output-mode MODE` | Run-result output: `progressbar`, `list`, or `json`; valid only for `run` |
 | `--engine ENGINE` | `auto`, `xelatex`, `pdflatex`, or `lualatex`; defaults to `auto` |
 | `-pdfxe` | Equivalent to `--engine xelatex` |
@@ -151,7 +153,7 @@ auto-latexmk [-h]
 
 Invalid cross-scope combinations are rejected.
 
-For example, preview/export do not accept `--jobs`, `--timeout`, or `--output-mode`, and clean tasks do not accept engine options.
+For example, preview/export do not accept `--jobs`, `--timeout`, or `--output-mode`; `--export-format` is valid only with `--action export`; and clean tasks do not accept engine options.
 
 The defaults are equivalent to:
 
@@ -231,19 +233,22 @@ Preview always uses a human-readable list on stdout.
 ### `export`
 
 Writes an executable script to stdout and no status text there.
-The syntax is selected from the current platform:
+The syntax is selected from the current platform by default:
 
 - Windows: PowerShell 7.
 - Linux/macOS/POSIX: `sh`.
 
-```bash
-auto-latexmk --action export > compile.sh
-sh compile.sh
-```
+Use `--export-format` to override the automatic selection:
 
-```powershell
-auto-latexmk --task clean-compile --action export > compile.ps1
-pwsh -File compile.ps1
+```bash
+# Auto-detect (default) — PowerShell on Windows, sh elsewhere
+auto-latexmk --action export > compile.sh
+
+# Force PowerShell regardless of platform
+auto-latexmk --action export --export-format pwsh > compile.ps1
+
+# Force bash/sh regardless of platform
+auto-latexmk --action export --export-format bash > compile.sh
 ```
 
 Paths are relative to the scanned root.
@@ -252,7 +257,7 @@ The complete script continues after independent failures and exits nonzero if an
 If a task directory cannot be entered, that task fails without running its commands from the caller's directory.
 
 Only the generated script and TeX Live are needed on the target machine; `auto-latexmk` itself is not required there.
-Export selects PowerShell on Windows and POSIX `sh` elsewhere, so there is no separate format option.
+By default, export selects PowerShell on Windows and POSIX `sh` elsewhere; use `--export-format` to override the automatic selection.
 Run the exported script from the directory that was scanned; for a single-file input, this is the source file's directory.
 Local `--jobs` and `--timeout` settings are intentionally not encoded into the script, avoiding extra scheduler or platform timeout dependencies.
 
