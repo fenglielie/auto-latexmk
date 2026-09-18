@@ -30,7 +30,10 @@ class Reporter(ABC):
             for step in result.steps:
                 if step.status not in {"failed", "cancelled"}:
                     continue
-                print(f"  {step.command.step.value}: {step.error_message}", file=self.stream)
+                print(
+                    f"  {step.command.step.value}: {step.error_message}",
+                    file=self.stream,
+                )
                 if step.error_excerpt:
                     for line in step.error_excerpt.splitlines():
                         print(f"    {line}", file=self.stream)
@@ -52,71 +55,77 @@ class Reporter(ABC):
     @abstractmethod
     def interrupted(self): ...
 
-    def running_changed(self, running: int):
-        return None
-
     def close(self):
         return None
 
 
+class _TaskProgressBar(tqdm):
+    BAR_WIDTH = 16
+
+    def __init__(self, *args, **kwargs):
+        self._failed_cells = set()
+        super().__init__(*args, **kwargs)
+
+    def record_result(self, success: bool):
+        if not success and self.total:
+            start = self.n * self.BAR_WIDTH // self.total
+            end = ((self.n + 1) * self.BAR_WIDTH + self.total - 1) // self.total
+            self._failed_cells.update(range(start, min(end, self.BAR_WIDTH)))
+        self.update(1)
+
+    @property
+    def format_dict(self):
+        data = super().format_dict
+        bar_data = dict(data, bar_format=f"{{bar:{self.BAR_WIDTH}}}", colour=None)
+        cells = list(self.format_meter(**bar_data))
+        if self.colour:
+            for index, cell in enumerate(cells):
+                failed = index in self._failed_cells
+                # Keep failures visible even when a task occupies less than one cell.
+                if failed and cell == " ":
+                    cell = "#" if self.ascii else "▏"
+                if cell != " ":
+                    code = "31" if failed else "32"
+                    cells[index] = f"\033[{code}m{cell}\033[0m"
+        data["task_bar"] = "".join(cells)
+        return data
+
+
 class ProgressBarReporter(Reporter):
     def __init__(self, *, task_type: TaskType, color: bool, stream=None):
-        super().__init__(
-            task_type=task_type, stream=stream or sys.stderr, color=color
-        )
+        super().__init__(task_type=task_type, stream=stream or sys.stderr, color=color)
         self._bar = None
         self._lock = threading.RLock()
-        self._total = 0
-        self._succeeded = 0
         self._failed = 0
-        self._running = 0
         self._width = 1
 
     def _format(self):
-        left = max(self._total - self._succeeded - self._failed, 0)
-        suffix = (
-            f"  {left:>{self._width}} LEFT"
-            f"  {self._succeeded:>{self._width}} OK"
-            f"  {self._failed:>{self._width}} FAILED"
-        )
-        if self._running > 1:
-            suffix += f"  ({self._running} parallel jobs)"
+        suffix = f"  {self._failed} failed" if self._failed else ""
         return (
-            "{desc}  {bar:20}  {percentage:3.0f}%  {elapsed} / ETA {remaining}"
-            + suffix
+            "{desc}  {task_bar}  "
+            f"{{n_fmt:>{self._width}}}/{{total_fmt}}  {{elapsed}}" + suffix
         )
 
     def start(self, tasks):
         with self._lock:
-            self._total = len(tasks)
-            self._width = len(str(max(self._total, 1)))
-            self._bar = tqdm(
-                total=self._total,
+            self._failed = 0
+            self._width = len(str(len(tasks)))
+            self._bar = _TaskProgressBar(
+                total=len(tasks),
                 desc=self.task_type.value.capitalize(),
                 bar_format=self._format(),
                 colour="green" if self.color else None,
                 file=self.stream,
             )
 
-    def running_changed(self, running: int):
-        with self._lock:
-            self._running = running
-            if self._bar is not None:
-                self._bar.bar_format = self._format()
-                self._bar.refresh()
-
     def task_finished(self, result: TaskResult):
         with self._lock:
             if self._bar is None:
                 raise RuntimeError("Progress reporter has not been started")
-            if result.success:
-                self._succeeded += 1
-            else:
+            if not result.success:
                 self._failed += 1
-                if self.color:
-                    self._bar.colour = "red"
             self._bar.bar_format = self._format()
-            self._bar.update(1)
+            self._bar.record_result(result.success)
 
     def finish(self, summary: RunSummary):
         self.close()
@@ -139,9 +148,7 @@ class ProgressBarReporter(Reporter):
 
 class ListReporter(Reporter):
     def __init__(self, *, task_type: TaskType, color: bool, stream=None):
-        super().__init__(
-            task_type=task_type, stream=stream or sys.stdout, color=color
-        )
+        super().__init__(task_type=task_type, stream=stream or sys.stdout, color=color)
         self._total = 0
         self._completed = 0
         self._width = 1

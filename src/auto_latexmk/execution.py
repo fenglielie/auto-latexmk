@@ -263,8 +263,6 @@ def run_tasks(tasks, *, jobs: int, timeout: int, reporter: Reporter):
     tasks = tuple(tasks)
     results = []
     STOP_EVENT.clear()
-    running = 0
-    running_lock = threading.Lock()
 
     aux_dirs = {
         os.path.join(command.cwd, ".aux")
@@ -280,23 +278,11 @@ def run_tasks(tasks, *, jobs: int, timeout: int, reporter: Reporter):
                 f"Failed to prepare auxiliary directory {aux_dir}: {error}"
             ) from error
 
-    def tracked(task):
-        nonlocal running
-        with running_lock:
-            running += 1
-            reporter.running_changed(running)
-        try:
-            return run_task(task, timeout=timeout)
-        finally:
-            with running_lock:
-                running -= 1
-                reporter.running_changed(running)
-
     executor = ThreadPoolExecutor(max_workers=jobs)
     futures = {}
     try:
         for task in tasks:
-            futures[executor.submit(tracked, task)] = task
+            futures[executor.submit(run_task, task, timeout=timeout)] = task
         for future in as_completed(futures):
             result = future.result()
             results.append(result)
