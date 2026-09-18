@@ -287,9 +287,10 @@ The default `--action run --output-mode progressbar` writes an updating bar to s
 
 ```console
 $ auto-latexmk
-Compile |████████████        |  59% [00:03<00:02] 12 LEFT 16 OK  1 FAILED (4 parallel jobs)
+Compile  ███████████▋           59%  00:03 / ETA 00:02  12 LEFT  16 OK   1 FAILED  (4 parallel jobs)
 ```
 
+The borderless bar is followed by the completion percentage, elapsed time, and estimated remaining time (`ETA`).
 `LEFT`, `OK`, and `FAILED` always add up to the number of planned tasks.
 The parallel-job suffix appears only while more than one task is actually running.
 After the bar closes, any failed tasks are printed with their extracted LaTeX error and log path.

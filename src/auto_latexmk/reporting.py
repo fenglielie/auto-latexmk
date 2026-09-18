@@ -75,13 +75,16 @@ class ProgressBarReporter(Reporter):
     def _format(self):
         left = max(self._total - self._succeeded - self._failed, 0)
         suffix = (
-            f" {left:>{self._width}} LEFT"
-            f" {self._succeeded:>{self._width}} OK"
-            f" {self._failed:>{self._width}} FAILED"
+            f"  {left:>{self._width}} LEFT"
+            f"  {self._succeeded:>{self._width}} OK"
+            f"  {self._failed:>{self._width}} FAILED"
         )
         if self._running > 1:
-            suffix += f" ({self._running} parallel jobs)"
-        return "{desc} |{bar:20}| {percentage:3.0f}% [{elapsed}<{remaining}]" + suffix
+            suffix += f"  ({self._running} parallel jobs)"
+        return (
+            "{desc}  {bar:20}  {percentage:3.0f}%  {elapsed} / ETA {remaining}"
+            + suffix
+        )
 
     def start(self, tasks):
         with self._lock:
