@@ -118,9 +118,9 @@ def build_task(
     engine_reason = None
     commands = []
 
-    if task_type in (TaskType.CLEAN, TaskType.CLEAN_COMPILE):
+    if task_type in (TaskType.CLEAN, TaskType.REBUILD):
         commands.append(build_clean_command(tex_file, subdir))
-    if task_type in (TaskType.COMPILE, TaskType.CLEAN_COMPILE):
+    if task_type in (TaskType.COMPILE, TaskType.REBUILD):
         engine, engine_reason = get_tex_engine(
             tex_file,
             requested_engine=requested_engine,

@@ -1,8 +1,6 @@
-import json
-import os
 import shutil
 import subprocess
-import sys
+import sysconfig
 import tempfile
 import unittest
 from pathlib import Path
@@ -38,48 +36,50 @@ class CliIntegrationTestCase(unittest.TestCase):
     maxDiff = None
 
     def setUp(self):
-        self.temporary_directory = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary_directory.cleanup)
-        self.root = Path(self.temporary_directory.name)
+        temporary = tempfile.TemporaryDirectory(prefix="auto latexmk ")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
 
     def copy_project(self, name):
         shutil.copytree(FIXTURES / name, self.root, dirs_exist_ok=True)
         if name == "english-project":
             (self.root / ".gitignore").write_text("ignored/\n", encoding="utf-8")
 
-    def run_cli(self, *arguments):
+    def run_cli(self, command="auto-latexmk", *arguments):
+        entry = shutil.which(command, path=sysconfig.get_path("scripts"))
+        if entry is None:
+            self.fail(f"Missing console entry point: {command}; run uv sync")
         return subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "auto_latexmk.auto_latexmk",
-                *arguments,
-            ],
+            [entry, "--no-color", *arguments],
             cwd=self.root,
             capture_output=True,
             text=True,
             encoding="utf-8",
+            errors="replace",
             timeout=120,
             check=False,
         )
 
-    def run_json(self, *arguments):
-        completed = self.run_cli(
-            "--output-mode",
-            "json",
-            "--timeout",
-            "90",
-            *arguments,
-            str(self.root),
-        )
-        try:
-            data = json.loads(completed.stdout)
-        except json.JSONDecodeError as error:
-            self.fail(
-                f"CLI did not emit valid JSON: {error}\n"
-                f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
-            )
-        return completed, data
+    def output(self, completed):
+        return completed.stdout + completed.stderr
+
+
+class ConsoleEntryTests(CliIntegrationTestCase):
+    def test_all_installed_commands_have_help_and_version(self):
+        for command in ("auto-latexmk", "auto-latexmk-clean", "auto-latexmk-rebuild"):
+            with self.subTest(command=command):
+                help_run = self.run_cli(command, "--help")
+                self.assertEqual(help_run.returncode, 0, self.output(help_run))
+                self.assertIn(f"usage: {command} ", help_run.stdout)
+                version_run = self.run_cli(command, "--version")
+                self.assertEqual(version_run.returncode, 0, self.output(version_run))
+                self.assertTrue(version_run.stdout.strip())
+
+    def test_empty_directory_succeeds(self):
+        for command in ("auto-latexmk", "auto-latexmk-clean", "auto-latexmk-rebuild"):
+            run = self.run_cli(command)
+            self.assertEqual(run.returncode, 0, self.output(run))
+            self.assertIn("No LaTeX main documents", self.output(run))
 
 
 @unittest.skipUnless(
@@ -87,122 +87,103 @@ class CliIntegrationTestCase(unittest.TestCase):
     "requires latexmk and pdflatex on PATH",
 )
 class PdfLatexCliIntegrationTests(CliIntegrationTestCase):
-    def test_compile_clean_and_clean_compile_lifecycle(self):
+    def test_compile_clean_and_rebuild_lifecycle(self):
         self.copy_project("english-project")
-
-        compile_run, compile_data = self.run_json(
-            "--engine", "pdflatex", "--no-engine-cache"
-        )
-        self.assertEqual(compile_run.returncode, 0, compile_run.stderr)
-        self.assertEqual(compile_data["schema_version"], 2)
-        self.assertEqual(compile_data["status"], "succeeded")
-        self.assertEqual(compile_data["summary"]["total"], 2)
-        self.assertEqual(
-            {Path(task["path"]).relative_to(self.root).as_posix() for task in compile_data["tasks"]},
-            {"notes/main.tex", "report/main.tex"},
-        )
-        self.assertTrue(all(task["status"] == "succeeded" for task in compile_data["tasks"]))
-        self.assertTrue((self.root / "notes" / "main.pdf").is_file())
-        self.assertTrue((self.root / "report" / "main.pdf").is_file())
-        self.assertTrue((self.root / "notes" / ".aux" / "main.log").is_file())
-        self.assertTrue((self.root / "report" / ".aux" / "main.log").is_file())
-        self.assertFalse((self.root / "ignored" / "draft.pdf").exists())
-
-        clean_run, clean_data = self.run_json("--task", "clean")
-        self.assertEqual(clean_run.returncode, 0, clean_run.stderr)
-        self.assertEqual(clean_data["status"], "succeeded")
-        self.assertEqual(clean_data["summary"]["total"], 2)
-        self.assertTrue(
-            all(task["steps"][0]["step"] == "clean" for task in clean_data["tasks"])
-        )
-        self.assertTrue((self.root / "notes" / "main.pdf").is_file())
-        self.assertTrue((self.root / "report" / "main.pdf").is_file())
-        self.assertFalse((self.root / "notes" / ".aux" / "main.aux").exists())
-        self.assertFalse((self.root / "report" / ".aux" / "main.aux").exists())
-
-        rebuild_run, rebuild_data = self.run_json(
-            "--task",
-            "clean-compile",
-            "--engine",
-            "pdflatex",
-            "--no-engine-cache",
-        )
-        self.assertEqual(rebuild_run.returncode, 0, rebuild_run.stderr)
-        self.assertEqual(rebuild_data["status"], "succeeded")
-        self.assertTrue(
-            all(
-                [step["step"] for step in task["steps"]] == ["clean", "compile"]
-                for task in rebuild_data["tasks"]
+        compiled = self.run_cli("auto-latexmk", "-pdf", "--no-engine-cache")
+        self.assertEqual(compiled.returncode, 0, self.output(compiled))
+        self.assertIn("2 succeeded, 0 failed", self.output(compiled))
+        for directory in ("notes", "report"):
+            self.assertTrue((self.root / directory / "main.pdf").is_file())
+            self.assertTrue((self.root / directory / ".aux/main.log").is_file())
+            self.assertTrue(
+                (self.root / directory / ".aux/main.auto-latexmk.log").is_file()
             )
-        )
-        self.assertTrue((self.root / "notes" / "main.pdf").is_file())
-        self.assertTrue((self.root / "report" / "main.pdf").is_file())
+        self.assertFalse((self.root / "ignored/draft.pdf").exists())
 
-    def test_exported_script_compiles_without_auto_latexmk(self):
+        cleaned = self.run_cli("auto-latexmk-clean")
+        self.assertEqual(cleaned.returncode, 0, self.output(cleaned))
+        self.assertIn("2 succeeded", self.output(cleaned))
+        for directory in ("notes", "report"):
+            self.assertTrue((self.root / directory / "main.pdf").is_file())
+            self.assertFalse((self.root / directory / ".aux/main.aux").exists())
+
+        rebuilt = self.run_cli("auto-latexmk-rebuild", "-pdf", "--no-engine-cache")
+        self.assertEqual(rebuilt.returncode, 0, self.output(rebuilt))
+        self.assertIn("2 succeeded", self.output(rebuilt))
+        for directory in ("notes", "report"):
+            self.assertTrue((self.root / directory / "main.pdf").is_file())
+            self.assertTrue((self.root / directory / ".aux/main.aux").is_file())
+            log = (self.root / directory / ".aux/main.auto-latexmk.log").read_text(
+                encoding="utf-8"
+            )
+            self.assertLess(log.index("Step: clean"), log.index("Step: compile"))
+            self.assertIn("Command:", log)
+            self.assertIn("Working directory:", log)
+
+    def test_failed_compile_shows_current_diagnostics_and_saves_full_output(self):
+        self.copy_project("failing-project")
+        completed = self.run_cli("auto-latexmk", "-pdf", "--no-engine-cache")
+        output = self.output(completed)
+        self.assertEqual(completed.returncode, 1, output)
+        self.assertIn("0 succeeded, 1 failed", output)
+        self.assertIn("Engine: pdflatex", output)
+        self.assertIn("Undefined control sequence", output)
+        self.assertIn("TeX log:", output)
+        self.assertIn("Full output:", output)
+        saved = self.root / "course/chapter/.aux/main.auto-latexmk.log"
+        self.assertTrue(saved.is_file())
+        self.assertIn("Undefined control sequence", saved.read_text(encoding="utf-8"))
+
+    def test_failed_rebuild_preserves_existing_pdf(self):
         self.copy_project("english-project")
-        exported = self.run_cli(
-            "--action",
-            "export",
+        main_file = self.root / "notes/main.tex"
+        compiled = self.run_cli(
+            "auto-latexmk", "-pdf", "--no-engine-cache", str(main_file)
+        )
+        self.assertEqual(compiled.returncode, 0, self.output(compiled))
+        pdf = main_file.with_suffix(".pdf")
+        main_file.write_text(
+            "\\documentclass{article}\n\\begin{document}\n"
+            "\\undefinedcommand\n\\end{document}\n",
+            encoding="utf-8",
+        )
+        rebuilt = self.run_cli(
+            "auto-latexmk-rebuild", "-pdf", "--no-engine-cache", str(main_file)
+        )
+        self.assertEqual(rebuilt.returncode, 1, self.output(rebuilt))
+        self.assertTrue(pdf.is_file())
+        self.assertIn("Undefined control sequence", self.output(rebuilt))
+
+    def test_verbose_and_single_file_show_command_and_compiler_output(self):
+        self.copy_project("english-project")
+        completed = self.run_cli(
+            "auto-latexmk",
             "--engine",
             "pdflatex",
             "--no-engine-cache",
-            str(self.root),
+            "--verbose",
+            str(self.root / "notes/main.tex"),
         )
-        self.assertEqual(exported.returncode, 0, exported.stderr)
+        output = self.output(completed)
+        self.assertEqual(completed.returncode, 0, output)
+        self.assertIn("1 succeeded", output)
+        self.assertIn("Command: latexmk", output)
+        self.assertIn("This is pdfTeX", output)
+        self.assertFalse((self.root / "report/main.pdf").exists())
 
-        if os.name == "nt":
-            shell = shutil.which("pwsh")
-            if shell is None:
-                self.skipTest("Windows export execution requires pwsh")
-            script = self.root / "commands.ps1"
-            command = [shell, "-NoProfile", "-File", str(script)]
-            self.assertIn("Push-Location", exported.stdout)
-        else:
-            shell = shutil.which("sh")
-            if shell is None:
-                self.skipTest("POSIX export execution requires sh")
-            script = self.root / "commands.sh"
-            command = [shell, str(script)]
-            self.assertTrue(exported.stdout.startswith("#!/bin/sh\n"))
-
-        script.write_text(exported.stdout, encoding="utf-8")
-        executed = subprocess.run(
-            command,
-            cwd=self.root,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=120,
-            check=False,
+    def test_no_gitignore_includes_broken_draft_and_finishes_other_documents(self):
+        self.copy_project("english-project")
+        completed = self.run_cli(
+            "auto-latexmk",
+            "-pdf",
+            "--no-engine-cache",
+            "--no-gitignore",
         )
-        self.assertEqual(
-            executed.returncode,
-            0,
-            f"stdout:\n{executed.stdout}\nstderr:\n{executed.stderr}",
-        )
-        self.assertTrue((self.root / "notes" / "main.pdf").is_file())
-        self.assertTrue((self.root / "report" / "main.pdf").is_file())
-        self.assertTrue((self.root / "notes" / ".aux" / "main.log").is_file())
-        self.assertTrue((self.root / "report" / ".aux" / "main.log").is_file())
-        self.assertFalse((self.root / "ignored" / "draft.pdf").exists())
-
-    def test_failed_compile_emits_machine_readable_diagnostics(self):
-        self.copy_project("failing-project")
-
-        completed, data = self.run_json(
-            "--engine", "pdflatex", "--no-engine-cache"
-        )
-
-        self.assertEqual(completed.returncode, 1)
-        self.assertEqual(data["status"], "failed")
-        self.assertEqual(data["summary"]["failed"], 1)
-        step = data["tasks"][0]["steps"][0]
-        self.assertEqual(step["status"], "failed")
-        self.assertIsInstance(step["argv"], list)
-        self.assertEqual(step["exit_code"], 12)
-        self.assertIn(step["error"]["kind"], {"latex-log", "process-output"})
-        self.assertIn("Undefined control sequence", step["error"]["excerpt"])
-        self.assertTrue(step["error"]["log_file"].endswith("main.log"))
+        output = self.output(completed)
+        self.assertEqual(completed.returncode, 1, output)
+        self.assertIn("2 succeeded, 1 failed", output)
+        self.assertTrue((self.root / "notes/main.pdf").is_file())
+        self.assertTrue((self.root / "report/main.pdf").is_file())
 
 
 @unittest.skipUnless(
@@ -212,18 +193,16 @@ class PdfLatexCliIntegrationTests(CliIntegrationTestCase):
 class XeLatexCliIntegrationTests(CliIntegrationTestCase):
     def test_chinese_document_uses_directive_and_compiles(self):
         self.copy_project("chinese-project")
-
-        completed, data = self.run_json("--no-engine-cache")
-
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(data["status"], "succeeded")
-        task = data["tasks"][0]
-        self.assertEqual(task["engine"], "xelatex")
-        self.assertEqual(task["engine_reason"], "% !TEX program = xelatex")
-        self.assertIn("-pdfxe", task["steps"][0]["argv"])
-        self.assertTrue(task["path"].endswith("/thesis/main.tex"))
-        self.assertTrue((self.root / "thesis" / "main.pdf").is_file())
-        self.assertTrue((self.root / "thesis" / ".aux" / "main.log").is_file())
+        completed = self.run_cli("auto-latexmk", "--no-engine-cache")
+        output = self.output(completed)
+        self.assertEqual(completed.returncode, 0, output)
+        self.assertIn("1 succeeded", output)
+        self.assertTrue((self.root / "thesis/main.pdf").is_file())
+        log = (self.root / "thesis/.aux/main.auto-latexmk.log").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Engine: xelatex (% !TEX program = xelatex)", log)
+        self.assertIn("-pdfxe", log)
 
 
 if __name__ == "__main__":

@@ -26,13 +26,13 @@ class PlanningTests(unittest.TestCase):
             self.assertTrue(is_main_tex_file(main))
             self.assertFalse(is_main_tex_file(fragment))
 
-    def test_compile_clean_and_clean_compile_commands(self):
+    def test_compile_clean_and_rebuild_commands(self):
         with tempfile.TemporaryDirectory() as directory:
             tex_file = self.write_tex(directory, "main.tex")
             expected = {
                 TaskType.COMPILE: [StepType.COMPILE],
                 TaskType.CLEAN: [StepType.CLEAN],
-                TaskType.CLEAN_COMPILE: [StepType.CLEAN, StepType.COMPILE],
+                TaskType.REBUILD: [StepType.CLEAN, StepType.COMPILE],
             }
             for task_type, steps in expected.items():
                 with self.subTest(task_type=task_type):
